@@ -5,11 +5,16 @@ name: shockstruck upstream sync
 # git and gh only; they never run Gradle or any upstream script.
 # The pushing job stays off until the repo variable SHOCKSTRUCK_SYNC_ENABLED is
 # 'true'; until then dry-run reports what a sync would do and pushes nothing.
+# Pull requests that touch this file run the dry run only, so a change to the
+# sync is proven before it reaches the default branch.
 
 on:
   schedule:
     - cron: "17 4 * * *"
   workflow_dispatch:
+  pull_request:
+    paths:
+      - .github/workflows/shockstruck-upstream-sync.yaml
 
 permissions: {}
 
@@ -59,7 +64,7 @@ jobs:
           cat "$GITHUB_STEP_SUMMARY"
 
   sync:
-    if: vars.SHOCKSTRUCK_SYNC_ENABLED == 'true'
+    if: github.event_name != 'pull_request' && vars.SHOCKSTRUCK_SYNC_ENABLED == 'true'
     runs-on: ubuntu-latest
     environment: upstream-sync
     permissions:

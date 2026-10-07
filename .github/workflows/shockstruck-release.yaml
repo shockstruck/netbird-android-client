@@ -130,20 +130,21 @@ jobs:
           keytool -genkeypair -keystore "$ks" -storepass:env KEYSTORE_PASS -keypass:env KEYSTORE_PASS \
             -alias dryrun -keyalg RSA -keysize 3072 -validity 1 -dname "CN=shockstruck dry run"
           expected=$(keytool -list -v -keystore "$ks" -storepass:env KEYSTORE_PASS -alias dryrun \
-            | sed -n 's/^ *SHA256: *//p' | tr -d ':' | tr 'A-F' 'a-f')
+            | sed -n 's/^[[:space:]]*SHA256:[[:space:]]*//p' | tr -d ':' | tr 'A-F' 'a-f')
 
           # The build key's v1 signature files must not survive into the final
           # APK. Strip them before zipalign (zip -d would undo the alignment).
-          # The v2/v3 signing block is replaced by apksigner below.
+          # The v2/v3 signing block is replaced by apksigner below, which is told
+          # not to add v1 files of its own.
           cp build.apk stripped.apk
           zip -q -d stripped.apk 'META-INF/*.SF' 'META-INF/*.RSA' 'META-INF/*.EC' 'META-INF/*.DSA' || true
           "$bt/zipalign" -P 16 -f 4 stripped.apk aligned.apk
-          "$bt/apksigner" sign --ks "$ks" --ks-key-alias dryrun \
+          "$bt/apksigner" sign --v1-signing-enabled false --ks "$ks" --ks-key-alias dryrun \
             --ks-pass env:KEYSTORE_PASS --key-pass env:KEYSTORE_PASS --out signed.apk aligned.apk
 
           "$bt/apksigner" verify --print-certs -v signed.apk | tee verify.txt
           grep -q '^Number of signers: 1$' verify.txt
-          actual=$(sed -n 's/^Signer #1 certificate SHA-256 digest: //p' verify.txt)
+          actual=$(sed -n 's/^.*certificate SHA-256 digest: //p' verify.txt | sort -u)
           echo "expected signer digest: ${expected}"
           echo "actual signer digest:   ${actual}"
           [ -n "$expected" ] && [ "$expected" = "$actual" ]
@@ -187,20 +188,21 @@ jobs:
           printf '%s' "$KEYSTORE_B64" | base64 -d > "$ks"
           trap 'rm -f "$ks"' EXIT
           expected=$(keytool -list -v -keystore "$ks" -storepass:env KEYSTORE_PASS -alias "$KEY_ALIAS" \
-            | sed -n 's/^ *SHA256: *//p' | tr -d ':' | tr 'A-F' 'a-f')
+            | sed -n 's/^[[:space:]]*SHA256:[[:space:]]*//p' | tr -d ':' | tr 'A-F' 'a-f')
 
           # The build key's v1 signature files must not survive into the final
           # APK. Strip them before zipalign (zip -d would undo the alignment).
-          # The v2/v3 signing block is replaced by apksigner below.
+          # The v2/v3 signing block is replaced by apksigner below, which is told
+          # not to add v1 files of its own.
           cp build.apk stripped.apk
           zip -q -d stripped.apk 'META-INF/*.SF' 'META-INF/*.RSA' 'META-INF/*.EC' 'META-INF/*.DSA' || true
           "$bt/zipalign" -P 16 -f 4 stripped.apk aligned.apk
-          "$bt/apksigner" sign --ks "$ks" --ks-key-alias "$KEY_ALIAS" \
+          "$bt/apksigner" sign --v1-signing-enabled false --ks "$ks" --ks-key-alias "$KEY_ALIAS" \
             --ks-pass env:KEYSTORE_PASS --key-pass env:KEY_PASS --out "$APK_NAME" aligned.apk
 
           "$bt/apksigner" verify --print-certs -v "$APK_NAME" | tee verify.txt
           grep -q '^Number of signers: 1$' verify.txt
-          actual=$(sed -n 's/^Signer #1 certificate SHA-256 digest: //p' verify.txt)
+          actual=$(sed -n 's/^.*certificate SHA-256 digest: //p' verify.txt | sort -u)
           echo "expected signer digest: ${expected}"
           echo "actual signer digest:   ${actual}"
           [ -n "$expected" ] && [ "$expected" = "$actual" ]

@@ -69,6 +69,7 @@ jobs:
     environment: upstream-sync
     permissions:
       contents: read
+      issues: write
     steps:
       - name: Mint sync App token
         id: app-token
@@ -80,7 +81,6 @@ jobs:
           repositories: ${{ github.event.repository.name }}
           permission-contents: write
           permission-pull-requests: write
-          permission-issues: write
           permission-workflows: write
 
       - name: Checkout main
@@ -93,9 +93,16 @@ jobs:
 
       - name: Merge upstream and open or update the PR
         env:
-          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          APP_TOKEN: ${{ steps.app-token.outputs.token }}
+          REPO_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
+          # The App token only pushes the branch and opens the PR (so that
+          # build-debug triggers) and enables auto-merge. Labels and the conflict
+          # issue use GITHUB_TOKEN, which holds issues: write; the App has no
+          # Issues permission.
+          app_gh() { GH_TOKEN="$APP_TOKEN" gh "$@"; }
+          repo_gh() { GH_TOKEN="$REPO_TOKEN" gh "$@"; }
           git remote add upstream "$UPSTREAM_URL"
           git fetch --quiet upstream main
           ahead=$(git rev-list --count HEAD..upstream/main)
@@ -113,14 +120,14 @@ jobs:
           git checkout -B "$SYNC_BRANCH" origin/main
           if ! git merge --no-ff -m "Merge netbirdio/android-client main" upstream/main; then
             git merge --abort || true
-            gh label create upstream-sync-conflict --color B60205 \
+            repo_gh label create upstream-sync-conflict --color B60205 \
               --description "Upstream sync could not merge cleanly" -R "$GITHUB_REPOSITORY" 2>/dev/null || true
             body="Merging netbirdio/android-client main (${ahead} new commits, head $(git rev-parse --short upstream/main)) into main conflicts. Resolve it by hand. Run: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
-            existing=$(gh issue list -R "$GITHUB_REPOSITORY" --label upstream-sync-conflict --state open --json number --jq '.[0].number // empty')
+            existing=$(repo_gh issue list -R "$GITHUB_REPOSITORY" --label upstream-sync-conflict --state open --json number --jq '.[0].number // empty')
             if [ -n "$existing" ]; then
-              gh issue comment "$existing" -R "$GITHUB_REPOSITORY" --body "$body"
+              repo_gh issue comment "$existing" -R "$GITHUB_REPOSITORY" --body "$body"
             else
-              gh issue create -R "$GITHUB_REPOSITORY" --label upstream-sync-conflict \
+              repo_gh issue create -R "$GITHUB_REPOSITORY" --label upstream-sync-conflict \
                 --title "Upstream sync conflict" --body "$body"
             fi
             exit 1
@@ -128,23 +135,24 @@ jobs:
 
           git push --force-with-lease origin "$SYNC_BRANCH"
 
-          gh label create upstream-sync-review --color FBCA04 \
+          repo_gh label create upstream-sync-review --color FBCA04 \
             --description "Upstream delta touches .github/: human merge required" -R "$GITHUB_REPOSITORY" 2>/dev/null || true
           pr_body="Merge of netbirdio/android-client main (${ahead} new commits). Upstream delta touches .github/: ${review}. Merge as a merge commit, never squash."
-          pr=$(gh pr list -R "$GITHUB_REPOSITORY" --head "$SYNC_BRANCH" --base main --state open --json number --jq '.[0].number // empty')
+          pr=$(app_gh pr list -R "$GITHUB_REPOSITORY" --head "$SYNC_BRANCH" --base main --state open --json number --jq '.[0].number // empty')
           if [ -n "$pr" ]; then
-            gh pr edit "$pr" -R "$GITHUB_REPOSITORY" --body "$pr_body"
+            app_gh api -X PATCH "repos/${GITHUB_REPOSITORY}/pulls/${pr}" -f body="$pr_body" > /dev/null
           else
-            gh pr create -R "$GITHUB_REPOSITORY" --head "$SYNC_BRANCH" --base main \
+            app_gh pr create -R "$GITHUB_REPOSITORY" --head "$SYNC_BRANCH" --base main \
               --title "Merge upstream netbirdio/android-client main" --body "$pr_body"
-            pr=$(gh pr list -R "$GITHUB_REPOSITORY" --head "$SYNC_BRANCH" --base main --state open --json number --jq '.[0].number')
+            pr=$(app_gh pr list -R "$GITHUB_REPOSITORY" --head "$SYNC_BRANCH" --base main --state open --json number --jq '.[0].number')
           fi
 
           if [ "$review" = yes ]; then
-            gh pr edit "$pr" -R "$GITHUB_REPOSITORY" --add-label upstream-sync-review
+            repo_gh api "repos/${GITHUB_REPOSITORY}/issues/${pr}/labels" -f 'labels[]=upstream-sync-review' > /dev/null
+            app_gh pr merge "$pr" -R "$GITHUB_REPOSITORY" --disable-auto 2>/dev/null || true
             echo "PR #${pr} touches .github/: left for a human merge." >> "$GITHUB_STEP_SUMMARY"
           else
-            gh pr edit "$pr" -R "$GITHUB_REPOSITORY" --remove-label upstream-sync-review 2>/dev/null || true
-            gh pr merge "$pr" -R "$GITHUB_REPOSITORY" --auto --merge
+            repo_gh api -X DELETE "repos/${GITHUB_REPOSITORY}/issues/${pr}/labels/upstream-sync-review" > /dev/null 2>&1 || true
+            app_gh pr merge "$pr" -R "$GITHUB_REPOSITORY" --auto --merge
             echo "PR #${pr} set to auto-merge as a merge commit once build-debug is green." >> "$GITHUB_STEP_SUMMARY"
           fi

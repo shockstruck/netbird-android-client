@@ -28,7 +28,7 @@ env:
 
 jobs:
   dry-run:
-    if: vars.SHOCKSTRUCK_SYNC_ENABLED != 'true'
+    if: github.event_name == 'pull_request' || vars.SHOCKSTRUCK_SYNC_ENABLED != 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -76,9 +76,9 @@ jobs:
         uses: actions/create-github-app-token@29824e69f54612133e76f7eaac726eef6c875baf # v2.2.1
         with:
           app-id: ${{ secrets.SYNC_APP_ID }}
+          # owner and repositories are left unset so the token is scoped to
+          # this repository; github.event.repository is empty on schedule runs.
           private-key: ${{ secrets.SYNC_APP_PRIVATE_KEY }}
-          owner: ${{ github.repository_owner }}
-          repositories: ${{ github.event.repository.name }}
           permission-contents: write
           permission-pull-requests: write
           permission-workflows: write
